@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import pngjs from 'pngjs';
 import { renderWireframe, WIREFRAMES } from '../src/demo.js';
 import { totp } from '../src/totp.js';
 
@@ -25,6 +26,8 @@ const SCREENS = {
   edit: { title: 'Profil bearbeiten', els: [back] },
   settings: { title: 'Einstellungen', els: [back, btn('Mitteilungen', 300), btn('Abmelden', 600)], taps: { Mitteilungen: 'notif', Abmelden: 'LOGOUT' } },
   notif: { title: 'Mitteilungen', els: [back] },
+  long: { title: 'Alle Übungen', els: [back] },
+  secret: { title: 'Geheim', els: [back] },
 };
 
 const WIRE = { profile2: 'profile', news: 'home', splash: 'splash', login: 'login', home: 'home', workouts: 'workouts', detail: 'detail', player: 'player', profile: 'profile', edit: 'edit', settings: 'settings', notif: 'notif', otp: 'login' };
@@ -51,8 +54,10 @@ const sheetEls = () => [text('Neu: Watchlists', 300), text('Behalte deine Kurse 
 const consentEls = () => [text('Ihre Privatsphäre ist uns wichtig', 200), text('Wir verwenden Cookies, wenn Sie auf Alle akzeptieren tippen.', 260), btn('Alle akzeptieren', 600), btn('Alle ablehnen', 660), { ...btn('Datenschutzerklärung', 720, 'Link'), web: true }];
 
 export class FakeApp {
-  constructor({ user = 'lena@pulse.app', pass = 'secret', secret = 'JBSWY3DPEHPK3PXP', sheet = false, consent = false, alert = false, external = false, ad = false, onboarding = false, feed = false, flaky = 0, extra = false, lag = 0, changes = {}, pin = null, restore = false } = {}) {
-    Object.assign(this, { user, pass, secret, sheet, consent, alertOn: alert, external, ad, onboarding, feed, flaky, extra, lag, changes, pin, restore });
+  constructor({ user = 'lena@pulse.app', pass = 'secret', secret = 'JBSWY3DPEHPK3PXP', sheet = false, consent = false, alert = false, external = false, ad = false, onboarding = false, feed = false, flaky = 0, extra = false, lag = 0, changes = {}, pin = null, restore = false, long = 0 } = {}) {
+    Object.assign(this, { user, pass, secret, sheet, consent, alertOn: alert, external, ad, onboarding, feed, flaky, extra, lag, changes, pin, restore, long });
+    this.offset = 0; // scroll position of the long list (long: its number of rows)
+    this.swipes = 0;
     this.pinFails = 0;
     this.pinOk = 0;
     this.pinTyped = '';
@@ -167,6 +172,8 @@ export class FakeApp {
       const ch = this.changes[this.screen] || {};
       els.push(...s.els.map((e) => (ch[e.label] ? { ...e, label: ch[e.label].label ?? e.label, y: ch[e.label].y ?? e.y, orig: e.label } : e)));
     }
+    if (this.long && this.screen === 'home') els.push(btn('Alle Übungen', 480));
+    if (this.screen === 'long') els.push(...this.longRows());
     if (this.external && this.screen === 'home') els.push(btn('Website', 480));
     if (this.extra && this.screen === 'home') els.push(btn('Neu', 250));
     if (this.feed && this.screen === 'home') {
@@ -243,6 +250,8 @@ export class FakeApp {
       return;
     }
     if (this.extra && this.screen === 'home' && el.label === 'Neu') return void this.stack.push('news');
+    if (this.long && this.screen === 'home' && el.label === 'Alle Übungen') return void this.stack.push('long');
+    if (this.screen === 'long' && /^Übung [A-Z]$/.test(el.label)) return void this.stack.push(el.label === 'Übung R' ? 'secret' : 'detail'); // R: the 18th row
     if (this.screen === 'home' && el.label === 'Profil' && ++this.profileTaps === this.flaky) return void this.stack.push('profile2');
     const ch = el.orig ? this.changes[this.screen]?.[el.orig] : null;
     let target = ch?.to || s.taps?.[el.orig || el.label];
@@ -256,11 +265,47 @@ export class FakeApp {
       this.stack.push(target);
     }
   }
+  // the long list as a picture at 1x: a white title area, rows in their own gray, the home indicator
+  longPicture() {
+    const { PNG } = pngjs;
+    const p = new PNG({ width: W, height: H });
+    const set = (y0, y1, rgb) => {
+      for (let y = Math.max(0, Math.floor(y0)); y < Math.min(H, Math.ceil(y1)); y++) for (let x = 0; x < W; x++) p.data.set([...rgb, 255], (y * W + x) * 4);
+    };
+    set(0, H, [242, 242, 247]);
+    for (let i = 0; i < this.long; i++) {
+      const y = 120 + i * 50 - this.offset;
+      const g = 40 + ((i * 37) % 180);
+      set(Math.max(100, y), Math.min(818, y + 44), [g, 255 - g, (g * 3) % 255]);
+    }
+    set(0, 100, [255, 255, 255]);
+    set(818, H, [250, 250, 250]);
+    return PNG.sync.write(p);
+  }
   async type(t) {
     if (this.overlay === 'pin' && this.focus === 'pin') return void (this.pinTyped += t);
     if (this.focus) this.fields[this.focus] = (this.fields[this.focus] || '') + t;
   }
+  // long: a list taller than the screen, rows "Übung A", "Übung B" … of 50 pt from y 120, the content between the title
+  // (up to 100) and the home indicator (from 818) scrolls; only rows in that area are listed.
+  longRows() {
+    const out = [];
+    for (let i = 0; i < this.long; i++) {
+      const y = 120 + i * 50 - this.offset;
+      if (y + 44 > 100 && y < 818) out.push({ ...btn(`Übung ${String.fromCharCode(65 + i)}`, y, 'Cell'), h: 44 });
+    }
+    return out;
+  }
+  get maxOffset() {
+    return Math.max(0, 120 + this.long * 50 - 818);
+  }
+  async swipe(x1, y1, x2, y2) {
+    this.swipes++;
+    if (this.screen !== 'long' || this.overlay) return;
+    this.offset = Math.max(0, Math.min(this.maxOffset, this.offset + (y1 - y2) * 1.4)); // a little momentum
+  }
   async screenshot(file) {
+    if (this.screen === 'long' && !this.overlay) return void fs.writeFileSync(file, this.longPicture());
     const key = WIRE[this.screen] || 'splash';
     const spec = WIREFRAMES[key];
     fs.writeFileSync(file, renderWireframe(spec('#3b6ef5')));

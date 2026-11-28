@@ -54,26 +54,53 @@ function boxesFrom(diff, w, h) {
 // image pixels, so it fits any screenshot scale (simulator 3x, real devices 2x or 3x).
 // minChangedRatio: below it no diff image is written (an unchanged screen never shows one).
 // ignore: areas left out ({ x, y, w, h } in points, or null for all of it); points: the screen
-// width in points, for the scale (3 if unknown).
+// width in points, for the scale (3 if unknown); screenHeight: one screen's height in points.
 // ignoreHomeIndicator: the bar at the bottom of Face ID iPhones, which iOS tints after what was
 // on screen before (bottom 2.5 %, middle half of the width), system UI like the status bar.
-export function comparePng(fileA, fileB, outFile, { threshold = 0.05, ignoreStatusBar = true, statusBarRatio, minChangedRatio = 0, ignore = [], points, ignoreHomeIndicator = true } = {}) {
-  const a = readPng(fileA);
-  const b = readPng(fileB);
-  if (a.width !== b.width || a.height !== b.height) {
+export function comparePng(fileA, fileB, outFile, { threshold = 0.05, ignoreStatusBar = true, statusBarRatio, minChangedRatio = 0, ignore = [], points, screenHeight, ignoreHomeIndicator = true } = {}) {
+  let a = readPng(fileA);
+  let b = readPng(fileB);
+  if (a.width !== b.width) {
     return { ratio: 1, boxes: [[0, 0, b.width, b.height]], width: b.width, height: b.height, sizeMismatch: true };
+  }
+  // the same width, another height: a long page (crawl.scroll) that got longer or shorter. Both
+  // are compared at the larger height; the rows only one of them has count as changed.
+  let longer = false;
+  if (a.height !== b.height) {
+    const h = Math.max(a.height, b.height);
+    const pad = (img) => {
+      if (img.height === h) return img;
+      const p = new PNG({ width: img.width, height: h });
+      p.data.fill(0);
+      for (let i = img.width * img.height * 4 + 3; i < p.data.length; i += 4) p.data[i] = 255; // opaque black
+      img.data.copy(p.data, 0);
+      return p;
+    };
+    const white = (img) => {
+      if (img.height === h) return img;
+      const p = pad(img);
+      for (let i = img.width * img.height * 4; i < p.data.length; i += 4) p.data.set([255, 255, 255, 255], i);
+      return p;
+    };
+    // black on one side and white on the other: the missing rows always differ
+    a = a.height < h ? pad(a) : a;
+    b = b.height < h ? white(b) : b;
+    longer = true;
   }
   const { width: w, height: h } = a;
   const scale = points > 0 ? w / points : 3;
+  // one screen's height in pixels: a long page (crawl.scroll) is several screens tall, its status
+  // bar and home indicator are those of one screen
+  const screen = screenHeight > 0 ? Math.min(h, Math.round(screenHeight * scale)) : h;
   const bData = Buffer.from(b.data);
   if (ignoreStatusBar) {
-    const rows = Math.min(h, Math.round(h * (statusBarRatio > 0 && statusBarRatio < 0.25 ? statusBarRatio : 0.065))); // default ~ the iOS status bar
+    const rows = Math.min(h, Math.round(screen * (statusBarRatio > 0 && statusBarRatio < 0.25 ? statusBarRatio : 0.065))); // default ~ the iOS status bar
     a.data.copy(bData, 0, 0, rows * w * 4);
   }
   if (ignoreHomeIndicator) {
     const x0 = Math.round(w * 0.25);
     const x1 = Math.round(w * 0.75);
-    for (let y = Math.round(h * 0.975); y < h; y++) a.data.copy(bData, (y * w + x0) * 4, (y * w + x0) * 4, (y * w + x1) * 4);
+    for (let y = h - Math.round(screen * 0.025); y < h; y++) a.data.copy(bData, (y * w + x0) * 4, (y * w + x0) * 4, (y * w + x1) * 4);
   }
   for (const r of ignore) {
     const x0 = r ? Math.max(0, Math.floor(r.x * scale)) : 0;
@@ -86,7 +113,7 @@ export function comparePng(fileA, fileB, outFile, { threshold = 0.05, ignoreStat
   const changed = pixelmatch(a.data, bData, out.data, w, h, { threshold, includeAA: false, alpha: 0.15, diffColor: [255, 0, 0], aaColor: [255, 255, 0] });
   const ratio = changed / (w * h);
   if (ratio >= minChangedRatio) fs.writeFileSync(outFile, PNG.sync.write(out));
-  return { ratio, boxes: changed ? boxesFrom(out.data, w, h) : [], width: w, height: h };
+  return { ratio, boxes: changed ? boxesFrom(out.data, w, h) : [], width: w, height: h, ...(longer ? { heightChanged: true } : {}) };
 }
 
 // Screens are matched across runs by the baseline screen a run that followed the baseline
@@ -158,7 +185,7 @@ export function buildReport({ store, baseId, headId, cfg }) {
     } else {
       const file = `${h.id}.png`;
       const areas = ignoreOf(h, b);
-      const r = comparePng(path.join(store.runDir(baseId), b.screenshot), path.join(store.runDir(headId), h.screenshot), path.join(outDir, file), { ...cfg.diff, statusBarRatio: statusBarRatio([[base, b], [head, h]]), ignore: areas, points: h.size?.w || b.size?.w });
+      const r = comparePng(path.join(store.runDir(baseId), b.screenshot), path.join(store.runDir(headId), h.screenshot), path.join(outDir, file), { ...cfg.diff, statusBarRatio: statusBarRatio([[base, b], [head, h]]), ignore: areas, points: h.size?.w || b.size?.w, screenHeight: h.size?.h || b.size?.h });
       if (areas.length) entry.ignored = areas;
       const changed = r.ratio >= cfg.diff.minChangedRatio;
       Object.assign(entry, { status: changed ? 'changed' : 'same', ratio: r.ratio, boxes: changed ? r.boxes : [], size: [r.width, r.height], diffImg: changed ? `diffs/${baseId}__${headId}/${file}` : null, sizeMismatch: !!r.sizeMismatch });

@@ -189,6 +189,11 @@ export class Wda {
     }
   }
 
+  // press at (x1, y1), move to (x2, y2) in `duration` seconds, lift: scrolls a list
+  drag(x1, y1, x2, y2, duration = 0.5) {
+    return this.s('POST', '/wda/dragfromtoforduration', { fromX: x1, fromY: y1, toX: x2, toY: y2, duration });
+  }
+
   tap(x, y) {
     return this.variants('tap', [
       () => this.s('POST', '/wda/tap', { x, y }),
@@ -420,6 +425,10 @@ export class IosDevice {
 
   async tap(x, y) {
     await this.wda.tap(x, y);
+  }
+
+  async swipe(x1, y1, x2, y2, { duration = 0.5 } = {}) {
+    await this.wda.drag(x1, y1, x2, y2, duration);
   }
 
   async type(text) {

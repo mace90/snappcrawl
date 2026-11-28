@@ -6,6 +6,7 @@ import { DEFAULT_DISMISS, alertFromElements, consentAccept, dismissButton, intro
 import { totp } from './totp.js';
 import { describeMove, pairActions } from './pairing.js';
 import { fileHasScrollBar } from './scrollbar.js';
+import { EDGE, contentBottom, fixedOverlays, floatingTop, mayScroll, shiftBetween, stitch } from './scroll.js';
 import { comparePng } from './diff.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -164,7 +165,7 @@ function locate(els, ref) {
 // "~4 min", "<1 min", "estimating" for an estimate in milliseconds.
 export const formatEta = (ms) => (ms == null ? 'estimating' : ms < 60_000 ? '<1 min' : `~${Math.round(ms / 60_000)} min`);
 
-const refOf = (a) => ({ type: a.type, label: a.label, id: a.id, x: a.x, y: a.y });
+const refOf = (a) => ({ type: a.type, label: a.label, id: a.id, x: a.x, y: a.y, ...(a.page ? { page: a.page } : {}) });
 
 /**
  * Breadth-first exploration of an app: level by level, navigation first (see TIERS).
@@ -182,7 +183,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   // needs no second read (each idb or WebDriverAgent call costs a few hundred ms).
   let moves = 0;
   let lastObs = null;
-  const MOVES = new Set(['tap', 'launch', 'type', 'alertAction', 'activate', 'resetData', 'reinstall']);
+  const MOVES = new Set(['tap', 'swipe', 'launch', 'type', 'alertAction', 'activate', 'resetData', 'reinstall']);
   const raw = driver;
   driver = new Proxy(raw, {
     get(t, k) {
@@ -200,7 +201,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   const deadline = started + c.timeLimitMin * 60_000;
   const atlas = {
     version: 1,
-    meta: { id: runId, label, created: new Date(started).toISOString(), app: cfg.app.bundleId, device: null, status: 'running', limits: { maxDepth: c.maxDepth, maxScreens: c.maxScreens, timeLimitMin: c.timeLimitMin, maxPerList: c.maxPerList || 0, prefer: c.prefer || [] } },
+    meta: { id: runId, label, created: new Date(started).toISOString(), app: cfg.app.bundleId, device: null, status: 'running', limits: { maxDepth: c.maxDepth, maxScreens: c.maxScreens, timeLimitMin: c.timeLimitMin, maxPerList: c.maxPerList || 0, prefer: c.prefer || [], ...(c.scroll ? { scroll: true, maxScrollPages: Number(c.maxScrollPages) || 5 } : {}) } },
     screens: [],
     edges: [],
   };
@@ -249,7 +250,8 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
 
   // How well what is on screen matches a known screen: 1 for the same fingerprint, else the
   // similarity of their signatures (stable parts only, see signature.js).
-  const score = (o, s) => (!s || s.crash ? 0 : o.fp === s.fp ? 1 : similarity(o.sig, s.sig));
+  // a screen scrolled down (crawl.scroll) is still that screen: its pages count too
+  const score = (o, s) => (!s || s.crash ? 0 : o.fp === s.fp || s.pages?.some((p) => p.fp === o.fp) ? 1 : Math.max(similarity(o.sig, s.sig), ...(s.pages || []).map((p) => similarity(o.sig, p.sig))));
   const is = (o, s) => score(o, s) >= threshold;
   function known(o) {
     const exact = byFp.get(o.fp);
@@ -535,10 +537,12 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   // look like a crash. Later launches wait for the app's own label.
   async function launchApp() {
     const before = c.launchMs ? appLabel((await observe()).els) : '';
+    // the app itself in front before: the same label afterwards is the app, started again
+    const itself = c.launchMs && !rootApp && before && (await driver.isRunning?.().catch(() => false));
     await driver.launch();
     await sleep(c.launchMs);
     if (!c.launchMs) return;
-    const inFront = (l) => (rootApp ? l === rootApp : !!l && (l !== before || l === atlas.meta.appName));
+    const inFront = (l) => (rootApp ? l === rootApp : !!l && (l !== before || itself || l === atlas.meta.appName));
     const wait = Math.max(15_000, c.launchMs * 6);
     const until = Date.now() + wait;
     let label = appLabel((await observe()).els);
@@ -714,17 +718,13 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     return best;
   }
 
-  async function register(o, depth, pathRefs, via, parent = null, base = null) {
-    const size = screenSize(o.els);
-    const id = `s${String(atlas.screens.length).padStart(3, '0')}`;
-    const file = `screens/${id}.png`;
-    const shot = path.join(dir, file);
+  // A picture that differs between runs only by timing is noise in every comparison. It is kept
+  // once a second picture a moment later agrees with it and it shows no scroll bar (iOS shows a
+  // list's scroll bar for a moment when the list appears or grows). This also waits out the
+  // last points of a sheet sliding in and system colors fading. A screen that never stands
+  // still (an animation) keeps its last picture, after about 3 s.
+  async function steadyShot(shot, size) {
     await driver.screenshot(shot);
-    // A picture that differs between runs only by timing is noise in every comparison. It is kept
-    // once a second picture a moment later agrees with it and it shows no scroll bar (iOS shows a
-    // list's scroll bar for a moment when the list appears or grows). This also waits out the
-    // last points of a sheet sliding in and system colors fading. A screen that never stands
-    // still (an animation) keeps its last picture, after about 3 s.
     for (let i = 0; i < 6 && c.settleMs > 0; i++) {
       const bar = fileHasScrollBar(shot, size?.w);
       await sleep(bar ? 500 : 200);
@@ -734,6 +734,113 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
       fs.renameSync(again, shot);
       if (still) break;
     }
+  }
+
+  /* ---------- scrolling (crawl.scroll) ----------
+   * A slow swipe over 30 % of the height (a fast one flings the list so far that nothing is on
+   * both reads). How far the content really moved is measured on the elements both reads have.
+   * Pages end when nothing moves any more, at crawl.maxScrollPages, or when no element is on
+   * both reads (then the pictures cannot be joined). Afterwards the screen is scrolled back up. */
+  const SCROLL = c.scroll ? Math.max(1, Number(c.maxScrollPages) || 5) : 0;
+  const swipeUp = (size) => driver.swipe(size.w / 2, size.h * 0.7, size.w / 2, size.h * 0.4, { duration: 1 });
+  const swipeDown = (size) => driver.swipe(size.w / 2, size.h * 0.4, size.w / 2, size.h * 0.7, { duration: 1 });
+  async function scrollPages(o, size, shot) {
+    // how far down: a fixed length (crawl.maxScrollPages half screens), not a number of swipes,
+    // whose reach varies with the momentum; what lies beyond is cut off in every run alike
+    const reach = SCROLL * size.h * 0.5;
+    const pages = [];
+    let prev = o;
+    let offset = 0;
+    for (let p = 1; p <= SCROLL * 3 && offset < reach; p++) {
+      await swipeUp(size);
+      const n = await observeSettled();
+      if (appLabel(n.els) !== appLabel(o.els)) break; // the swipe left the screen (a sheet closed)
+      if (p === 1) {
+        const top = floatingTop(o.els, n.els, size);
+        if (top) pages.bottom = Math.min(contentBottom(o.els, size), top);
+        pages.overlays = fixedOverlays(o.els, n.els).filter((r) => !top || r.y < top);
+      }
+      const moved = shiftBetween(prev.els, n.els);
+      if (moved == null) break; // too far to join
+      if (moved < 4) {
+        pages.ended = true; // the end of the content
+        break;
+      }
+      const file = `${shot}.p${p}.png`;
+      await steadyShot(file, size);
+      // measured again after the picture: the last points of the deceleration would put the seam
+      // a pixel or two off
+      const m = await observe();
+      const d = shiftBetween(prev.els, m.els) ?? shiftBetween(prev.els, n.els);
+      offset += d;
+      pages.push({ els: m.els, fp: m.fp, sig: m.sig, offset, file });
+      prev = m;
+    }
+    // back up (a little more than down: the list bounces at the top)
+    for (let i = 0; i <= pages.length; i++) await swipeDown(size);
+    await observeSettled();
+    if (pages.length) {
+      const scale = await pngScale(shot, size);
+      const bottom = pages.bottom || contentBottom(o.els, size);
+      // something at the bottom that is not content (a search field, a toolbar): it changes while
+      // scrolling, so nothing of the lower pages near it is used
+      const busy = !!pages.bottom || o.els.some((e) => /^(searchfield|textfield|toolbar)$/i.test(e.type) && e.y + e.h / 2 > size.h * 0.75);
+      const ok = stitch([{ file: shot, offset: 0 }, ...pages], { scale, bottom, out: shot, limit: bottom + reach, overlays: pages.overlays || [], ended: !!pages.ended, keepEnd: !busy });
+      pages.calm = bottom - EDGE; // on the lower pages, only what lies above this line counts
+      pages.endsCalm = !!pages.ended && !busy; // except on the last one at the end of a list without a floating bar
+      pages.limit = bottom + reach; // the content ends here (points), for actions and texts too
+      if (!ok) log('WARN', `pages of different sizes · only the first one is kept as the picture`);
+    }
+    for (const p of pages) fs.rmSync(p.file, { force: true });
+    return pages;
+  }
+  const pngScale = async (file, size) => {
+    const b = fs.readFileSync(file);
+    return b.readUInt32BE(16) / size.w; // PNG width from the IHDR chunk
+  };
+
+  // Bring an action of a page below into view: scroll toward its page until it is visible.
+  const findEl = (els, a) => (a.id && els.find((e) => e.id === a.id)) || els.find((e) => e.type === a.type && e.label && e.label === a.label);
+  const pageOf = (o, s) => {
+    let best = 0;
+    let top = score({ ...o, fp: '' }, { ...s, pages: [] });
+    for (const [i, p] of (s.pages || []).entries()) {
+      const v = o.fp === p.fp ? 1 : similarity(o.sig, p.sig);
+      if (v > top) [best, top] = [i + 1, v];
+    }
+    return best;
+  };
+  // Before a tap: the element must be in the open part of the screen, not under a bar or a
+  // floating search field. Scroll toward it: by its place when it is listed, else toward its page.
+  async function seek(o, a, s) {
+    if (!SCROLL || !s) return o;
+    const size = s.size || screenSize(o.els);
+    const top = size.h * 0.12;
+    const bottom = () => Math.min(s.bottom || Infinity, contentBottom(o.els, size)) - 8;
+    for (let i = 0; i < ((s.pages?.length || 0) + 1) * 2; i++) {
+      const e = findEl(o.els, a);
+      const y = e && e.y + e.h / 2;
+      if (e && y > top && y < bottom()) return o;
+      if (!e && !a.page) return o; // not listed and on the first page: nothing to scroll to
+      if (!s.pages && !(e && y >= bottom())) return o;
+      const up = e ? y >= bottom() : pageOf(o, s) < a.page;
+      await (up ? swipeUp(size) : swipeDown(size));
+      const n = await observeSettled();
+      if (n.fp === o.fp) return n; // nothing moved: as far as it goes
+      o = n;
+    }
+    return o;
+  }
+
+
+  async function register(o, depth, pathRefs, via, parent = null, base = null) {
+    const size = screenSize(o.els);
+    const id = `s${String(atlas.screens.length).padStart(3, '0')}`;
+    const file = `screens/${id}.png`;
+    const shot = path.join(dir, file);
+    await steadyShot(shot, size);
+    // crawl.scroll: the pages below, their actions and texts, one tall picture
+    const pages = SCROLL && !isConsent(o.els) && mayScroll(o.els, size) ? await scrollPages(o, size, shot) : [];
     const consent = isConsent(o.els);
     // with --intro skip or fresh you asked for cookie banners to be accepted: the banner is
     // kept as a screen whose only action is accepting it
@@ -752,8 +859,25 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
       pairOf.set(id, byKey);
     }
     // what the screen says, for comparisons in words (what an agent reads instead of pixels)
-    const texts = [...new Set(o.els.filter((e) => !e.web && !/^(application|window|other)$/i.test(e.type)).map((e) => clip(String(e.label || e.value || '').replace(/\s+/g, ' ').trim(), 80)).filter(Boolean))].slice(0, 120);
+    // a page's elements up to the cut of the tall picture (see scrollPages)
+    const upTo = (p) => p.els.filter((e) => (!pages.limit || e.y + e.h / 2 + p.offset <= pages.limit) && (!pages.calm || e.y + e.h / 2 <= pages.calm || (pages.endsCalm && p === pages.at(-1) && e.y + e.h / 2 <= pages.calm + EDGE)));
+    const allEls = [o.els, ...pages.map(upTo)].flat();
+    const texts = [...new Set(allEls.filter((e) => !e.web && !/^(application|window|other)$/i.test(e.type)).map((e) => clip(String(e.label || e.value || '').replace(/\s+/g, ' ').trim(), 80)).filter(Boolean))].slice(0, 200);
+    // the actions of the pages below, with their page and their place on the whole page
+    if (pages.length && !consent) {
+      const seen = new Set(actions.map(akey));
+      for (const [i, p] of pages.entries()) {
+        for (const a of actionsOf(upTo(p), size, c.blocklist, { webLinks: c.webLinks, prefer: [].concat(c.prefer || []), maxPerList: Number(c.maxPerList) || 0 }).actions) {
+          if (a.tab || seen.has(akey(a))) continue;
+          seen.add(akey(a));
+          actions.push({ ...a, y: a.y + p.offset, page: i + 1 });
+          if (depth < c.maxDepth) prog.total++;
+        }
+      }
+    }
     const s = { id, name: uniqueName(names, nameOf(o.els, size, via)), fp: o.fp, sig: o.sig, depth, path: pathRefs, parent, screenshot: file, elements: o.els.length, size, actions, blocked, texts };
+    if (pages.length) s.pages = pages.map((p) => ({ offset: Math.round(p.offset), fp: p.fp, sig: p.sig }));
+    if (pages.bottom) s.bottom = Math.round(pages.bottom); // where a floating bar covers the content
     if (base) {
       s.base = base.id;
       usedBase.add(base.id);
@@ -762,9 +886,10 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     if (limited) s.limited = limited;
     atlas.screens.push(s);
     byFp.set(o.fp, s);
+    for (const p of s.pages || []) if (!byFp.has(p.fp)) byFp.set(p.fp, s);
     byId.set(id, s);
     save();
-    log('INFO', `screen.new ${id} "${s.name}" · ${o.els.length} elements · ${actions.length} actions · depth ${depth}`);
+    log('INFO', `screen.new ${id} "${s.name}" · ${o.els.length} elements · ${actions.length} actions · depth ${depth}${pages.length ? ` · ${pages.length + 1} pages, ${Math.round(pages.at(-1).offset + size.h)} pt` : ''}`);
     for (const b of blocked) log('WARN', `action.skip "${b}" (blocklist)`);
     for (const w of web) log('STEP', `action.skip "${clip(w)}" (web link)`);
     if (limited) log('STEP', `action.skip ${limited} more list item${limited === 1 ? '' : 's'} (max ${c.maxPerList} per list)`);
@@ -832,6 +957,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   // checked by similarity; a step that lands elsewhere gets the dismiss treatment.
   async function replayFrom(o, steps, k) {
     for (let i = k + 1; i < steps.length; i++) {
+      o = await seek(o, steps[i].path.at(-1), steps[i - 1]);
       const p = locate(o.els, steps[i].path.at(-1));
       await driver.tap(p.x, p.y);
       await settle();
@@ -988,14 +1114,15 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
         }
         prog.done++;
         progress();
-        const p = locate(o.els, act);
+        const at = await seek(o, act, s);
+        const p = locate(at.els, act);
         log('STEP', `tap "${clip(act.label || act.type, 60)}" on ${s.id}`);
         if (act.tab) tabs.set(tabKey(act), null);
         event('tap', { screen: s.id, x: p.x, y: p.y, size: s.size });
         await driver.tap(p.x, p.y);
 
         // still the app's own screen: neither crashed nor left, no need to ask for the app state
-        let n = await afterTap(o);
+        let n = await afterTap(at);
         const state = rootApp && appLabel(n.els) === rootApp ? 4 : await appState();
         if (state !== 4 && state > 1) {
           // Safari or another app came to the front: note it, go back, register nothing
@@ -1042,9 +1169,10 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
           log('INFO', `tap "${clip(act.label || act.type)}" on ${s.id} led elsewhere than in the baseline ("${exp.name}") · once more after a fresh start`);
           const o2 = await goTo(s, { fresh: true });
           if (o2) {
-            const p2 = locate(o2.els, act);
+            const o3 = await seek(o2, act, s);
+            const p2 = locate(o3.els, act);
             await driver.tap(p2.x, p2.y);
-            const n2 = await afterTap(o2);
+            const n2 = await afterTap(o3);
             if ((rootApp && appLabel(n2.els) === rootApp) || (await appState()) === 4) {
               n = await ensureAuth(n2);
               log('INFO', hitsExp(n) ? `retry on ${s.id} · as in the baseline` : `retry on ${s.id} · different again, kept as it is`);

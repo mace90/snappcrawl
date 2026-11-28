@@ -99,6 +99,8 @@ ${t.bold('Crawl options')}
   --block <a,b,c>             extra words that are never tapped
   --prefer <a,b,c>            labels to tap before everything else, in this order
   --max-per-list <n>          only the first n cells of each list (default: all)
+  --scroll                    scroll long screens page by page: tap what is below, compare the whole page
+  --scroll-pages <n>          with --scroll: at most n pages below the first (default 5)
   --diff                      compare against the baseline when done
 
 ${t.bold('Build from Xcode')} ${t.gray('(check and crawl, simulator)')}
@@ -145,6 +147,8 @@ const { values: opt, positionals: pos } = parseArgs({
     'no-follow': { type: 'boolean' },
     reinstall: { type: 'string' },
     'max-per-list': { type: 'string' },
+    scroll: { type: 'boolean' },
+    'scroll-pages': { type: 'string' },
     then: { type: 'string' },
     area: { type: 'string' },
     parallel: { type: 'string' },
@@ -373,7 +377,7 @@ const commands = {
     if (!cfg.app.bundleId) throw expected(`no app given · --bundle com.example.app or app.bundleId in ${LOCAL_FILE} (snappcrawl apps lists bundle ids)`);
     // check: the limits of the baseline unless given, so none of its screens is out of reach
     const lim = checking ? baselineLimits(store, opt.against || cfg.app.bundleId) : null;
-    if (lim) Object.assign(cfg.crawl, { maxDepth: lim.maxDepth, maxScreens: lim.maxScreens, timeLimitMin: lim.timeLimitMin, maxPerList: lim.maxPerList || 0 });
+    if (lim) Object.assign(cfg.crawl, { maxDepth: lim.maxDepth, maxScreens: lim.maxScreens, timeLimitMin: lim.timeLimitMin, maxPerList: lim.maxPerList || 0, ...(lim.scroll ? { scroll: true, maxScrollPages: lim.maxScrollPages } : {}) });
     if (opt['max-depth']) cfg.crawl.maxDepth = Number(opt['max-depth']);
     if (opt['max-screens']) cfg.crawl.maxScreens = Number(opt['max-screens']);
     if (opt.minutes) cfg.crawl.timeLimitMin = Number(opt.minutes);
@@ -393,6 +397,8 @@ const commands = {
     }
     if (opt.prefer) cfg.crawl.prefer = list(opt.prefer);
     if (opt['max-per-list']) cfg.crawl.maxPerList = Number(opt['max-per-list']);
+    if (opt.scroll || opt['scroll-pages']) cfg.crawl.scroll = true;
+    if (opt['scroll-pages']) cfg.crawl.maxScrollPages = Number(opt['scroll-pages']);
     if (opt.against) cfg.crawl.against = opt.against;
     if (opt.then && opt.against) throw expected('--then crawls the baseline app itself · leave out --against');
     if (opt.then === cfg.app.bundleId) throw expected('--then needs another bundle id than --bundle · to compare one app with itself, crawl it twice');

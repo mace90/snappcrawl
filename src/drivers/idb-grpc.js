@@ -156,6 +156,13 @@ export class Companion {
     return JSON.parse(r[1]?.[0]?.toString('utf8') || 'null');
   }
 
+  // HIDEvent { swipe = 2: HIDSwipe { start = 1, end = 2, delta = 5 (points per step), duration = 6 (s) } }
+  async swipe(x1, y1, x2, y2, { duration = 0.5, delta = 0 } = {}) {
+    const pt = (x, y) => Buffer.concat([double(1, x), double(2, y)]);
+    const swipe = Buffer.concat([sub(1, pt(x1, y1)), sub(2, pt(x2, y2)), ...(delta ? [double(5, delta)] : []), double(6, duration)]);
+    await this.call('hid', [sub(2, swipe)]);
+  }
+
   async tap(x, y) {
     await this.call('hid', [touch(x, y, 0), touch(x, y, 1)]);
   }
