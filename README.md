@@ -542,6 +542,16 @@ snappcrawl crawl --bundle com.acme.app --intro fresh                     # simul
 snappcrawl crawl --device "Lena's iPhone" --bundle com.acme.app --reinstall build/Acme.app
 ```
 
+## Long screens: scrolling
+
+By default a crawl sees what fits on the screen: buttons further down a long page are never tapped, and changes there go unnoticed. With `--scroll` (`crawl.scroll`, UI: Setup → *scroll long screens*, MCP `check` with `scroll: true`) every screen whose content reaches the bottom is scrolled page by page:
+
+- **What is below is crawled.** The buttons and cells of every page become actions of the screen; before tapping one, the crawler scrolls it into view. Elements under a floating bar (the search field at the bottom of the iOS 26 Settings) are scrolled up first, so the tap does not land on the bar.
+- **The whole page is compared.** The pages are joined into one tall picture, bars once at the top and bottom. A page that got longer or shorter is compared over the common height, the extra rows count as changed. Texts and buttons of all pages are in the comparison in words.
+- **A scrolled screen is still that screen**, also when the app keeps the scroll position on the way back.
+
+Scrolling is a slow swipe over 30 % of the height; how far the content moved is measured on the elements before and after, so momentum does not matter. The reach is a fixed length, half a screen per page of `crawl.maxScrollPages` (5, `--scroll-pages <n>`), cut off exactly, so two runs cover the same part of a page. Pages also end when nothing moves any more or two pages share no element. What iOS 26 changes while scrolling is kept out of the comparison: the blurred edge above a bottom bar, a floating search field that shrinks and grows, an A–Z index that stays put. Two crawls of the iOS Settings with `--scroll` compare 16 of 16 screens as identical. Cost: about 2–3 s per page. In the iOS Settings (depth 1) it found 16 screens instead of 10, among them *Datenschutz & Sicherheit*, *Apps* and *Entwickler*, all below the fold. A run with `--scroll` stores it in its limits, so `check` against such a baseline scrolls too.
+
 ## Safety: the blocklist
 
 Elements whose label contains a blocklisted word are never tapped. Defaults: `log out`, `sign out`, `delete account`, `buy`, `purchase`, `pay now`, plus German equivalents. Extend it per app in `crawl.blocklist`. Skipped actions are logged as `action.skip`.
@@ -622,6 +632,8 @@ Both options are also in the web UI under **Setup → Limits and interruptions**
 | `crawl.reinstall` | | with `fresh`: a `.app` to uninstall and install before each run (`--reinstall`) |
 | `crawl.prefer` | `[]` | labels tapped before everything else, in this order (`--prefer`, see [Crawl order](#crawl-order)) |
 | `crawl.maxPerList` | `0` | only the first n cells of each list, `0` = all (`--max-per-list`) |
+| `crawl.scroll` | `false` | scroll long screens page by page (`--scroll`, see [Long screens](#long-screens-scrolling)) |
+| `crawl.maxScrollPages` | `5` | with scroll: at most this many pages below the first (`--scroll-pages`) |
 | `diff.threshold` | `0.05` | per-pixel colour tolerance (0–1); at 0.1 a white card on the light gray iOS background goes unnoticed |
 | `diff.minChangedRatio` | `0.0005` | share of changed pixels below which a screen counts as unchanged |
 | `diff.ignoreStatusBar` | `true` | masks the clock and battery area |
@@ -662,7 +674,7 @@ Then `snappcrawl diff --ai`, or **Notes** in the web UI. Global settings live in
 | `snappcrawl check` | crawl and compare with the baseline in one go, for agents and CI · `--build --base-ref <ref> --project --scheme --set --json --junit`, exit codes 0–4 (see [With coding agents](#with-coding-agents)) |
 | `snappcrawl mcp` | MCP server on stdio for coding agents |
 | `snappcrawl init --agents` | AGENTS.md, CLAUDE.md, Copilot instructions and MCP configs for this repository |
-| `snappcrawl crawl` | explore the app · `--bundle --then --parallel --against --udid --device --label --max-depth --max-screens --minutes --mfa --prepare --alerts --dismiss --block --prefer --max-per-list --intro --reinstall --no-follow --diff` |
+| `snappcrawl crawl` | explore the app · `--bundle --then --parallel --against --scroll --scroll-pages --udid --device --label --max-depth --max-screens --minutes --mfa --prepare --alerts --dismiss --block --prefer --max-per-list --intro --reinstall --no-follow --diff` |
 | `snappcrawl runs` · `runs rm <run>` | list runs, delete one with its comparisons |
 | `snappcrawl baseline [run]` | show baselines, or make a run the baseline of its app |
 | `snappcrawl diff [base] [head]` | compare runs (default: baseline vs the newest run after it, or the pair of `crawl --then`) · `--ai` |

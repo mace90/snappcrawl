@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Long screens: scrolling
+- `--scroll` (`crawl.scroll`, `--scroll-pages <n>` / `crawl.maxScrollPages`, UI field, MCP `scroll`): screens whose content reaches the bottom are scrolled page by page. Their buttons below the fold become actions (scrolled into view before the tap), their texts count in the comparison, and the pages are joined into one tall picture.
+- Swipes are slow (30 % of the height in 1 s); the real shift is measured on elements both reads have. Pages end when nothing moves, at the page limit, or when two pages share nothing.
+- A floating bar at the bottom (the search field of the iOS 26 Settings) is recognised as what stays put while the content moves: an element under it is scrolled up before the tap, and the tall picture shows it once.
+- A screen is recognised in any scroll position (its pages' fingerprints and signatures).
+- Two runs show the same tall picture: the reach is a fixed length (half a screen per `maxScrollPages`), cut off exactly, instead of a number of swipes whose reach varies with momentum; the shift is measured again after each picture; new rows are taken above the blurred edge iOS 26 draws over a bottom bar; the bottom bar itself comes from the first page; what stays put while scrolling (an A–Z section index) shows only once; a floating search field that iOS shrinks and grows while scrolling is left out of the lower pages. iOS Settings, depth 1, scrolled twice: 16 of 16 screens identical.
+- Comparing pictures of different heights (a page that got longer): the common part is compared, the extra rows count as changed; before, the whole screen counted as 100 % changed. Status bar and home indicator masks use one screen's height.
+- Drivers: `swipe` on the simulator (idb_companion HID swipe, or `idb ui swipe`) and on iPhones (WebDriverAgent `dragfromtoforduration`).
+- iOS Settings, depth 1: 16 screens instead of 10.
+- Fix: an app that was already in front before the start counted as not started (the launch wait of the previous fix).
+
 - Fix: after a launch the simulator shows the app that was in front before, or the home screen, for a moment, on a cold start for seconds. The crawler took that for the app's first screen and every tap after it for a crash. It now waits until the app is in front (its own label once known), up to 15 s, and otherwise stops with "… did not come to the front".
 
 ## 0.4.0

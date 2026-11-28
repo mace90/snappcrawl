@@ -36,6 +36,8 @@ export const DEFAULTS = {
     reinstall: '', // with intro fresh: a .app to uninstall and install before each run
     prefer: [], // labels tapped before everything else, e.g. ["Konto", "Einstellungen"]
     maxPerList: 0, // only the first n cells of each list (0 = all)
+    scroll: false, // scroll long screens page by page: their actions, texts and one tall picture
+    maxScrollPages: 5, // with scroll: at most this many pages below the first
     against: '', // bundle id of another app whose baseline this run is compared with (a second build)
     blocklist: [
       'log out', 'logout', 'sign out', 'abmelden',

@@ -79,6 +79,7 @@ export const TOOLS = [
         minutes: num('time limit (default: as in the baseline, else 10)'),
         then: str('a second build installed side by side: bundleId becomes the baseline, this one is compared with it'),
         intro: { type: 'string', enum: ['keep', 'skip', 'fresh'], description: 'screens shown only on the first start' },
+        scroll: { type: 'boolean', description: 'scroll long screens page by page: tap what is below the fold, compare the whole page (slower; default: as in the baseline)' },
         wait: num('seconds to wait for the result before answering with the progress (default 45)'),
       },
     },
@@ -179,7 +180,7 @@ export function startMcp({ cfg, store, version = '', input = process.stdin, outp
     if (!run.app.bundleId && !building) throw new Error('which app? · pass bundleId (list_apps shows them) or set app.bundleId in snappcrawl.config.json');
     // like the baseline, so its screens are all within reach; else a quick first map
     const lim = baselineLimits(store, a.then ? run.app.bundleId : run.crawl.against || run.app.bundleId) || {};
-    Object.assign(run.crawl, { maxScreens: a.maxScreens || lim.maxScreens || 40, maxDepth: a.maxDepth || lim.maxDepth || 4, timeLimitMin: a.minutes || lim.timeLimitMin || 10, maxPerList: lim.maxPerList || 0 });
+    Object.assign(run.crawl, { maxScreens: a.maxScreens || lim.maxScreens || 40, maxDepth: a.maxDepth || lim.maxDepth || 4, timeLimitMin: a.minutes || lim.timeLimitMin || 10, maxPerList: lim.maxPerList || 0, scroll: a.scroll ?? !!lim.scroll, maxScrollPages: lim.maxScrollPages || 5 });
     if (lim.prefer?.length) run.crawl.prefer = lim.prefer;
     if (a.intro) run.crawl.intro = a.intro;
     if ([...jobs.values()].some((j) => j.running)) throw new Error('a check is already running · check_status or stop it first');
@@ -217,7 +218,7 @@ export function startMcp({ cfg, store, version = '', input = process.stdin, outp
           run.app.bundleId = a.bundleId || built.bundleId;
           job.app = run.app.bundleId;
           const lim = baselineLimits(store, run.app.bundleId) || {};
-          Object.assign(run.crawl, { maxScreens: a.maxScreens || lim.maxScreens || 40, maxDepth: a.maxDepth || lim.maxDepth || 4, timeLimitMin: a.minutes || lim.timeLimitMin || 10 });
+          Object.assign(run.crawl, { maxScreens: a.maxScreens || lim.maxScreens || 40, maxDepth: a.maxDepth || lim.maxDepth || 4, timeLimitMin: a.minutes || lim.timeLimitMin || 10, scroll: a.scroll ?? !!lim.scroll, maxScrollPages: lim.maxScrollPages || 5 });
         }
         if (a.appPath) {
           if (platform !== 'ios-sim') throw new Error('appPath installs on a simulator · on an iPhone install it with Xcode');

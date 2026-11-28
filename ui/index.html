@@ -175,7 +175,7 @@ table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0
     <section class="blk"><h2><span>04</span>Limits and interruptions</h2>
       <div class="grid3"><label class="fl"><span>max depth</span><input class="in mono" id="depth" type="number" min="1"></label><label class="fl"><span>max screens</span><input class="in mono" id="maxs" type="number" min="1"></label><label class="fl"><span>minutes</span><input class="in mono" id="mins" type="number" min="1"></label></div>
       <label class="fl"><span>prefer · tapped before everything else, in this order (navigation comes next, list items last)</span><input class="in" id="prefer" spellcheck="false" placeholder="e.g. Konto, Einstellungen"></label>
-      <div class="grid3"><label class="fl"><span>max per list · 0 = all</span><input class="in mono" id="perlist" type="number" min="0"></label></div>
+      <div class="grid3"><label class="fl"><span>max per list · 0 = all</span><input class="in mono" id="perlist" type="number" min="0"></label><label class="fl"><span>scroll long screens · pages below</span><input class="in mono" id="scrollpages" type="number" min="0" max="20" placeholder="0 = off"></label></div>
       <label class="fl"><span>blocklist · elements containing these words are never tapped</span><textarea class="in" id="block" spellcheck="false"></textarea></label>
       <div class="grid3"><label class="fl" style="grid-column:span 2"><span>system alerts (notifications, location, tracking)</span><select class="in" id="alerts"><option value="dismiss">deny automatically</option><option value="accept">allow automatically</option><option value="pause">pause and let me answer</option></select></label></div>
       <label class="fl"><span>dismiss · buttons that close onboarding sheets and hints (exact labels)</span><textarea class="in" id="dismiss" spellcheck="false"></textarea></label>
@@ -446,6 +446,7 @@ function renderCli() {
   if ($('#label').value) parts.push(`--label ${esc($('#label').value)}`);
   if ($('#prefer').value.trim()) parts.push(`--prefer "${esc($('#prefer').value.split(',').map((s) => s.trim()).filter(Boolean).join(','))}"`);
   if (+$('#perlist').value > 0) parts.push(`--max-per-list ${+$('#perlist').value}`);
+  if (+$('#scrollpages').value > 0) parts.push(+$('#scrollpages').value === 5 ? '--scroll' : `--scroll-pages ${+$('#scrollpages').value}`);
   if (!$('#follow').checked) parts.push('--no-follow');
   if ($('#intro').value) parts.push(`--intro ${$('#intro').value}`);
   if ($('#intro').value === 'fresh' && $('#reinstall').value.trim()) parts.push(`--reinstall "${esc($('#reinstall').value.trim())}"`);
@@ -479,6 +480,7 @@ function fillSetup() {
   $('#follow').checked = c.crawl.follow !== false;
   $('#reinstall').value ||= c.crawl.reinstall || '';
   $('#perlist').value = c.crawl.maxPerList || 0;
+  $('#scrollpages').value = c.crawl.scroll ? c.crawl.maxScrollPages || 5 : 0;
   renderMfa();
 }
 $('#v-setup').addEventListener('click', (e) => {
@@ -495,7 +497,7 @@ $('#start').onclick = async () => {
   const body = {
     udid: S.udid, platform: S.dtype === 'device' ? 'ios-device' : 'ios-sim', bundleId: $('#bundle').value.trim(), then: $('#then').value.trim(), parallel: $('#then').value.trim() && S.dtype !== 'device' ? $('#thenon').value : '', label: $('#label').value.trim(),
     auth: { username: $('#user').value, password: $('#pass').value, mfa: S.mfa, totpSecret: $('#totp').value.trim(), pin: $('#pin').value.trim(), fallbackManual: $('#fallback').checked },
-    crawl: { maxDepth: +$('#depth').value || undefined, maxScreens: +$('#maxs').value || undefined, timeLimitMin: +$('#mins').value || undefined, blocklist: $('#block').value.split(',').map((s) => s.trim()).filter(Boolean), prepare: $('#prepare').checked, systemAlerts: $('#alerts').value, dismiss: $('#dismiss').value.split(',').map((s) => s.trim()).filter(Boolean), prefer: $('#prefer').value.split(',').map((s) => s.trim()).filter(Boolean), maxPerList: Math.max(0, +$('#perlist').value || 0), follow: $('#follow').checked, intro: $('#intro').value, reinstall: $('#intro').value === 'fresh' ? $('#reinstall').value.trim() : '', against: $('#then').value.trim() ? '' : $('#against').value.trim() },
+    crawl: { maxDepth: +$('#depth').value || undefined, maxScreens: +$('#maxs').value || undefined, timeLimitMin: +$('#mins').value || undefined, blocklist: $('#block').value.split(',').map((s) => s.trim()).filter(Boolean), prepare: $('#prepare').checked, systemAlerts: $('#alerts').value, dismiss: $('#dismiss').value.split(',').map((s) => s.trim()).filter(Boolean), prefer: $('#prefer').value.split(',').map((s) => s.trim()).filter(Boolean), maxPerList: Math.max(0, +$('#perlist').value || 0), scroll: +$('#scrollpages').value > 0, maxScrollPages: Math.max(1, +$('#scrollpages').value || 5), follow: $('#follow').checked, intro: $('#intro').value, reinstall: $('#intro').value === 'fresh' ? $('#reinstall').value.trim() : '', against: $('#then').value.trim() ? '' : $('#against').value.trim() },
   };
   try { await api('/api/crawl', body); S.live = { id: null, atlas: null, log: [], logRun: null, ask: null, running: true }; runGraph.fitted = false; show('run'); }
   catch (e) { toast(e.message); }

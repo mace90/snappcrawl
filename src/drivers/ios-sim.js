@@ -269,6 +269,12 @@ export class IosSimulator {
     await this.fast('tap', (c) => c.tap(px, py), () => sh('idb', ['ui', 'tap', '--udid', this.udid, String(px), String(py)]));
   }
 
+  // a finger from (x1, y1) to (x2, y2) in `duration` seconds: scrolls a list
+  async swipe(x1, y1, x2, y2, { duration = 0.5 } = {}) {
+    const r = (v) => Math.round(v);
+    await this.fast('swipe', (c) => c.swipe(r(x1), r(y1), r(x2), r(y2), { duration }), () => sh('idb', ['ui', 'swipe', '--udid', this.udid, String(r(x1)), String(r(y1)), String(r(x2)), String(r(y2)), '--duration', String(duration)]));
+  }
+
   async type(text) {
     await sh('idb', ['ui', 'text', '--udid', this.udid, text]);
   }
